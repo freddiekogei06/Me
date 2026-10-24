@@ -1,0 +1,277 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Gold Signal Scanner (XAUUSD)</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: #070d1e; color: #f1f5f9; padding: 16px; display: flex; justify-content: center; }
+    .container { width: 100%; max-width: 440px; }
+    .card { background: #131d38; border-radius: 14px; padding: 18px; margin-bottom: 14px; border: 1px solid #1e293b; box-shadow: 0 4px 12px rgba(0,0,0,0.3); }
+    .header { display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; }
+    .badge { font-size: 11px; padding: 4px 8px; border-radius: 6px; font-weight: 600; text-transform: uppercase; }
+    .badge-disconnected { background: #ef444420; color: #f87171; border: 1px solid #ef444440; }
+    .badge-connected { background: #10b98120; color: #34d399; border: 1px solid #10b98140; }
+    .price-display { font-size: 32px; font-weight: 700; color: #f8fafc; margin: 8px 0; }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
+    .stat-box { background: #0b132b; padding: 10px; border-radius: 8px; border: 1px solid #1e293b; }
+    .stat-label { font-size: 11px; color: #94a3b8; text-transform: uppercase; }
+    .stat-val { font-size: 15px; font-weight: 600; margin-top: 2px; }
+    .signal-card { text-align: left; padding: 14px; border-radius: 10px; background: #0b132b; border-left: 5px solid #64748b; }
+    .signal-buy { border-left-color: #10b981; }
+    .signal-sell { border-left-color: #ef4444; }
+    .signal-wait { border-left-color: #f59e0b; }
+    .signal-title { font-size: 18px; font-weight: 700; margin-bottom: 6px; }
+    .signal-row { font-size: 13px; line-height: 1.6; color: #cbd5e1; }
+    .signal-row strong { color: #f8fafc; }
+    button { width: 100%; padding: 12px; border-radius: 8px; background: #2563eb; color: #fff; font-weight: 600; border: none; cursor: pointer; margin-top: 10px; font-size: 14px; }
+    button:active { background: #1d4ed8; }
+    .notice { font-size: 11px; color: #64748b; margin-top: 12px; text-align: center; }
+  </style>
+</head>
+<body>
+
+  <div class="container">
+    <!-- Market Feed Header -->
+    <div class="card">
+      <div class="header">
+        <div>
+          <h2 style="font-size: 18px;">Gold Scanner (XAU/USD)</h2>
+          <span style="font-size: 12px; color: #94a3b8;">5-Minute Interval (M5)</span>
+        </div>
+        <span id="connectionBadge" class="badge badge-disconnected">Disconnected</span>
+      </div>
+
+      <div id="priceDisplay" class="price-display">---.--</div>
+      <div id="updateTime" style="font-size: 12px; color: #94a3b8;">Timestamp: Waiting for feed...</div>
+
+      <div class="grid">
+        <div class="stat-box">
+          <div class="stat-label">EMA (20)</div>
+          <div id="valEma20" class="stat-val">---</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">EMA (50)</div>
+          <div id="valEma50" class="stat-val">---</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">RSI (14)</div>
+          <div id="valRsi" class="stat-val">---</div>
+        </div>
+        <div class="stat-box">
+          <div class="stat-label">ATR (14 Volatility)</div>
+          <div id="valAtr" class="stat-val">---</div>
+        </div>
+      </div>
+
+      <button onclick="fetchMarketData()">🔄 Refresh Scanner Feed</button>
+    </div>
+
+    <!-- Signal Assessment Card -->
+    <div class="card">
+      <div id="signalContainer" class="signal-card">
+        <div id="signalAction" class="signal-title" style="color: #94a3b8;">STATUS: INITIALIZING</div>
+        <div class="signal-row"><strong>Duration:</strong> <span id="signalDuration">---</span></div>
+        <div class="signal-row"><strong>Suggested Entry:</strong> <span id="signalEntry">---</span></div>
+        <div class="signal-row"><strong>Calculated Stop Loss:</strong> <span id="signalSl">---</span></div>
+        <div class="signal-row"><strong>Target Profit:</strong> <span id="signalTp">---</span></div>
+        <div class="signal-row" style="margin-top: 6px;"><strong>Assessment Logic:</strong> <span id="signalReason">Awaiting technical feed...</span></div>
+      </div>
+      <p class="notice">Read-Only Analytics. No order placement or credential handling.</p>
+    </div>
+  </div>
+
+  <script>
+    const SYMBOL = 'frxXAUUSD';
+    const GRANULARITY = 300; // 5-minute candles
+    let ws = null;
+
+    function setDisconnectedState(message) {
+      const badge = document.getElementById('connectionBadge');
+      badge.className = 'badge badge-disconnected';
+      badge.innerText = 'Disconnected';
+      document.getElementById('priceDisplay').innerText = 'Feed Offline';
+      document.getElementById('updateTime').innerText = message || 'Market feed not connected.';
+      document.getElementById('signalAction').innerText = 'STATUS: NO DATA';
+      document.getElementById('signalAction').style.color = '#94a3b8';
+      document.getElementById('signalReason').innerText = 'Connect to live market feed to view indicator calculations.';
+    }
+
+    function fetchMarketData() {
+      const badge = document.getElementById('connectionBadge');
+      badge.className = 'badge badge-disconnected';
+      badge.innerText = 'Connecting...';
+      document.getElementById('updateTime').innerText = 'Establishing WebSocket connection...';
+
+      if (ws) {
+        ws.close();
+      }
+
+      // Deriv official public market data gateway (Read-Only, zero credentials required)
+      ws = new WebSocket('wss://ws.derivws.com/websockets/v3?app_id=1089');
+
+      ws.onopen = () => {
+        // Request 50 historical 5-minute candles
+        ws.send(JSON.stringify({
+          ticks_history: SYMBOL,
+          adjust_start_time: 1,
+          count: 60,
+          end: 'latest',
+          style: 'candles',
+          granularity: GRANULARITY
+        }));
+      };
+
+      ws.onerror = () => {
+        setDisconnectedState('Connection error. Deriv feed unreachable.');
+      };
+
+      ws.onclose = () => {
+        // Handled cleanly
+      };
+
+      ws.onmessage = (event) => {
+        try {
+          const data = JSON.parse(event.data);
+
+          if (data.error) {
+            setDisconnectedState('Deriv API Error: ' + data.error.message);
+            return;
+          }
+
+          if (data.msg_type === 'candles') {
+            const candles = data.candles;
+            if (!candles || candles.length < 50) {
+              setDisconnectedState('Insufficient candle volume returned for Gold.');
+              return;
+            }
+            processMarketFeed(candles);
+          }
+        } catch (err) {
+          setDisconnectedState('Failed to process incoming market buffer.');
+        }
+      };
+    }
+
+    // --- MATHEMATICAL INDICATOR ALGORITHMS ---
+    function calculateEMA(prices, period) {
+      const k = 2 / (period + 1);
+      let ema = prices.slice(0, period).reduce((a, b) => a + b, 0) / period;
+      for (let i = period; i < prices.length; i++) {
+        ema = (prices[i] * k) + (ema * (1 - k));
+      }
+      return ema;
+    }
+
+    function calculateRSI(closes, period = 14) {
+      let gains = 0, losses = 0;
+      for (let i = 1; i <= period; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) gains += diff;
+        else losses -= diff;
+      }
+      let avgGain = gains / period;
+      let avgLoss = losses / period;
+
+      for (let i = period + 1; i < closes.length; i++) {
+        const diff = closes[i] - closes[i - 1];
+        if (diff >= 0) {
+          avgGain = (avgGain * (period - 1) + diff) / period;
+          avgLoss = (avgLoss * (period - 1)) / period;
+        } else {
+          avgGain = (avgGain * (period - 1)) / period;
+          avgLoss = (avgLoss * (period - 1) + Math.abs(diff)) / period;
+        }
+      }
+
+      if (avgLoss === 0) return 100;
+      const rs = avgGain / avgLoss;
+      return 100 - (100 / (1 + rs));
+    }
+
+    function calculateATR(candles, period = 14) {
+      const trs = [];
+      for (let i = 1; i < candles.length; i++) {
+        const hl = candles[i].high - candles[i].low;
+        const hc = Math.abs(candles[i].high - candles[i - 1].close);
+        const lc = Math.abs(candles[i].low - candles[i - 1].close);
+        trs.push(Math.max(hl, hc, lc));
+      }
+      return trs.slice(-period).reduce((a, b) => a + b, 0) / period;
+    }
+
+    function processMarketFeed(candles) {
+      // 1. Connection Confirmation
+      const badge = document.getElementById('connectionBadge');
+      badge.className = 'badge badge-connected';
+      badge.innerText = 'Connected';
+
+      const closes = candles.map(c => Number(c.close));
+      const latestCandle = candles[candles.length - 1];
+      const currentPrice = Number(latestCandle.close);
+
+      // 2. Metrics calculation
+      const ema20 = calculateEMA(closes, 20);
+      const ema50 = calculateEMA(closes, 50);
+      const rsi14 = calculateRSI(closes, 14);
+      const atr14 = calculateATR(candles, 14);
+
+      // 3. Render numeric stats
+      document.getElementById('priceDisplay').innerText = currentPrice.toFixed(2);
+      const date = new Date(latestCandle.epoch * 1000);
+      document.getElementById('updateTime').innerText = `Latest Candle: ${date.toLocaleTimeString()} (${date.toLocaleDateString()})`;
+
+      document.getElementById('valEma20').innerText = ema20.toFixed(2);
+      document.getElementById('valEma50').innerText = ema50.toFixed(2);
+      document.getElementById('valRsi').innerText = rsi14.toFixed(1);
+      document.getElementById('valAtr').innerText = atr14.toFixed(2);
+
+      // 4. Determine rule-based assessment
+      const signalContainer = document.getElementById('signalContainer');
+      const actionEl = document.getElementById('signalAction');
+      const durationEl = document.getElementById('signalDuration');
+      const entryEl = document.getElementById('signalEntry');
+      const slEl = document.getElementById('signalSl');
+      const tpEl = document.getElementById('signalTp');
+      const reasonEl = document.getElementById('signalReason');
+
+      signalContainer.className = 'signal-card';
+
+      if (currentPrice > ema20 && ema20 > ema50 && rsi14 > 50 && rsi14 < 70) {
+        signalContainer.classList.add('signal-buy');
+        actionEl.innerText = '🎯 ACTION: BUY (BULLISH MOMENTUM)';
+        actionEl.style.color = '#34d399';
+        durationEl.innerText = '15–45 Minutes (3–9 M5 Candles)';
+        entryEl.innerText = `${currentPrice.toFixed(2)} or minor pullback to ${ema20.toFixed(2)}`;
+        slEl.innerText = (currentPrice - (1.5 * atr14)).toFixed(2);
+        tpEl.innerText = (currentPrice + (3.0 * atr14)).toFixed(2);
+        reasonEl.innerText = 'Price is tracking above EMA 20 & 50 with sustained positive RSI momentum.';
+      } else if (currentPrice < ema20 && ema20 < ema50 && rsi14 < 50 && rsi14 > 30) {
+        signalContainer.classList.add('signal-sell');
+        actionEl.innerText = '🎯 ACTION: SELL (BEARISH TREND)';
+        actionEl.style.color = '#f87171';
+        durationEl.innerText = '15–45 Minutes (3–9 M5 Candles)';
+        entryEl.innerText = `${currentPrice.toFixed(2)} or rejection near ${ema20.toFixed(2)}`;
+        slEl.innerText = (currentPrice + (1.5 * atr14)).toFixed(2);
+        tpEl.innerText = (currentPrice - (3.0 * atr14)).toFixed(2);
+        reasonEl.innerText = 'Price is tracking below EMA 20 & 50 with bearish RSI pressure.';
+      } else {
+        signalContainer.classList.add('signal-wait');
+        actionEl.innerText = '⏳ ACTION: WAIT (NEUTRAL / CHOPPY)';
+        actionEl.style.color = '#fbbf24';
+        durationEl.innerText = 'Stand by for next M5 candle close';
+        entryEl.innerText = 'No immediate entry signal';
+        slEl.innerText = 'N/A';
+        tpEl.innerText = 'N/A';
+        reasonEl.innerText = rsi14 >= 70 || rsi14 <= 30 
+          ? 'RSI indicates overbought/oversold exhaustion. Wait for reversal confirmation.'
+          : 'Price is consolidating between moving averages with no clear edge.';
+      }
+    }
+
+    // Auto-initialize on load
+    window.addEventListener('DOMContentLoaded', fetchMarketData);
+  </script>
+</body>
+  </html>
